@@ -39,6 +39,7 @@ jobs:
           fi
           test -f "$apk"
           signer=$("$tool_dir/apksigner" verify --print-certs "$apk")
+          printf "%s\n" "$signer"
           printf "%s\n" "$signer" | grep -Fx "Signer #1 certificate SHA-256 digest: $expected_cert"
           if printf "%s\n" "$signer" | grep -q "Signer #2"; then echo "Multiple signers are not supported" >&2; exit 1; fi
           badging=$("$tool_dir/aapt" dump badging "$apk")
