@@ -1,0 +1,65 @@
+name: Publish Android update
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - output/Beacon-Pulse-release.apk
+      - .github/workflows/publish-android.yml
+permissions:
+  contents: write
+concurrency:
+  group: beacon-android-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate signed Android app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_cert=bcaaaf22330f8e9e1a6b626f664cb9612799af3b8fbaa90f33839874737a87e8
+          sdk=${ANDROID_HOME:?Android SDK is required}
+          tool_dir=$(find "$sdk/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          test -x "$tool_dir/apksigner" && test -x "$tool_dir/aapt"
+          apk=output/Beacon-Pulse-release.apk
+          if [ ! -f "$apk" ]; then
+            if gh release view --repo "$REPO" >/dev/null 2>&1; then
+              echo "Release APK is missing. Refusing to republish the old test app." >&2
+              exit 1
+            fi
+            apk=Beacon-Pulse-social-test.apk
+            echo "Bootstrapping with the existing published test app; no newer build is included."
+          fi
+          test -f "$apk"
+          signer=$("$tool_dir/apksigner" verify --print-certs "$apk")
+          printf "%s\n" "$signer" | grep -Fx "Signer #1 certificate SHA-256 digest: $expected_cert"
+          if printf "%s\n" "$signer" | grep -q "Signer #2"; then echo "Multiple signers are not supported" >&2; exit 1; fi
+          badging=$("$tool_dir/aapt" dump badging "$apk")
+          printf "%s\n" "$badging" | grep -q "^package: name='com.beaconpulse.app' "
+          version=$(printf "%s\n" "$badging" | head -n1 | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+          test -n "$version"
+          if gh release view --repo "$REPO" >/dev/null 2>&1; then
+            gh release download --repo "$REPO" --pattern Beacon-Pulse.apk --output /tmp/previous-beacon.apk
+            previous=$("$tool_dir/aapt" dump badging /tmp/previous-beacon.apk | head -n1 | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+            test -n "$previous"
+            if [ "$version" -lt "$previous" ]; then echo "Version would downgrade the published app" >&2; exit 1; fi
+          fi
+          mkdir -p dist
+          cp "$apk" dist/Beacon-Pulse.apk
+      - name: Publish validated APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=android-${COMMIT:0:12}
+          gh release create "$tag" dist/Beacon-Pulse.apk --repo "$REPO" --target "$COMMIT" --title "Beacon Pulse Android test" --notes "Signed test update. Install over the existing app; do not uninstall first." --latest
