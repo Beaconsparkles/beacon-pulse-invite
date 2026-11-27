@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Validate signed Android app
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,9 +39,9 @@ jobs:
           fi
           test -f "$apk"
           signer=$("$tool_dir/apksigner" verify --print-certs "$apk")
-          printf "%s\n" "$signer"
-          printf "%s\n" "$signer" | grep -Fx "Signer #1 certificate SHA-256 digest: $expected_cert"
-          if printf "%s\n" "$signer" | grep -q "Signer #2"; then echo "Multiple signers are not supported" >&2; exit 1; fi
+          digests=$(printf "%s\n" "$signer" | grep "certificate SHA-256 digest:" | sed "s/^.*: //")
+          test -n "$digests"
+          if printf "%s\n" "$digests" | grep -Fvx "$expected_cert"; then echo "Unexpected signing certificate" >&2; exit 1; fi
           badging=$("$tool_dir/aapt" dump badging "$apk")
           printf "%s\n" "$badging" | grep -q "^package: name='com.beaconpulse.app' "
           version=$(printf "%s\n" "$badging" | head -n1 | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
